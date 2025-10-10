@@ -1,0 +1,63 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: leader-election
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: leader-election
+  template:
+    metadata:
+      labels:
+        app: leader-election
+    spec:
+      serviceAccountName: leader-election
+      initContainers:
+        - name: elector-sidecar
+          image: localops/leader-elector:0.3.0
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 4040
+          args:
+            - "--election=init-sidecar-test-deployment"
+            - "--namespace=default"
+            - "--port=4040"
+          resources:
+            limits:
+              memory: "64Mi"
+              cpu: "100m"
+        - name: test-container
+          image: alpine/curl:v1.0.3
+          command:
+            - "/bin/sh"
+            - "-c"
+            - |
+              # wait for elector-sidecar to be ready
+              sleep 20;
+
+              # install jq
+              echo "Installing jq..."
+              apk add --no-cache curl jq
+              echo "jq installed"
+
+              # parse name from the response object
+              echo "Fetching leader."
+              NAME=$(curl -s http://localhost:4040 | jq -r '.name');
+              echo "Leader is $NAME"
+
+              # print the arguments
+              echo "Arguments: $@"
+
+              if [ "$NAME" == "$CURRENT_POD_NAME" ]; then
+                echo "I am the leader";
+              else
+                echo "I am not the leader";
+              fi
+
+              exit 0;
+          env:
+            - name: CURRENT_POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
