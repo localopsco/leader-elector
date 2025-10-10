@@ -9,7 +9,6 @@ RUN go mod download
 COPY . .
 
 ENV CGO_ENABLED=0
-
 RUN go build -ldflags='-s -w -extldflags "-static"' -o elector .
 
 FROM gcr.io/distroless/static:nonroot
