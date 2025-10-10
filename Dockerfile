@@ -10,7 +10,7 @@ COPY . .
 
 ENV CGO_ENABLED=0
 
-RUN go build -ldflags='-s -w -extldflags "-static"' -o elector main.go
+RUN go build -ldflags='-s -w -extldflags "-static"' -o elector .
 
 FROM gcr.io/distroless/static:nonroot
 USER nonroot:nonroot
