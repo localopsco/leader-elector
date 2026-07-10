@@ -26,7 +26,7 @@ Configuration is entirely via CLI flags or environment variables (`go-arg` struc
 | Flag | Env var | Default | Purpose |
 |---|---|---|---|
 | `--election` | `ELECTION_NAME` | `default` | Name of the Lease object |
-| (positional `Namespace`) | `ELECTION_NAMESPACE` | `default` | Namespace of the Lease |
+| `--namespace` | `ELECTION_NAMESPACE` | `default` | Namespace of the Lease (derived flag name — the `Namespace` field has no explicit `--namespace` in its `go-arg` tag, but `go-arg` defaults unnamed, non-positional fields to `strings.ToLower(field.Name)`) |
 | `--renew-deadline` | `ELECTION_RENEW_DEADLINE` | `10s` | How long the leader retries renewing before giving up |
 | `--retry-period` | `ELECTION_RETRY_PERIOD` | `2s` | Delay between election retries |
 | `--lease-duration` | `ELECTION_LEASE_DURATION` | `15s` | How long non-leaders wait before attempting to acquire an unrenewed lease |
