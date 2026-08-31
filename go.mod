@@ -1,6 +1,6 @@
 module github.com/localops/leader-elector
 
-go 1.26.0
+go 1.26.7
 
 require (
 	github.com/alexflint/go-arg v1.6.1

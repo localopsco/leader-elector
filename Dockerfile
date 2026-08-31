@@ -1,9 +1,11 @@
 # Build stage
 #
-# The builder tag deliberately floats on the minor version so that every rebuild
-# picks up the latest Go patch release, and with it the latest stdlib security
-# fixes. Go supports only the two most recent majors, so this must be bumped
-# before the current line goes end-of-life.
+# The stdlib compiled into the binary is chosen by the `go` directive in go.mod,
+# NOT by this tag: with GOTOOLCHAIN=auto (the default), Go downloads exactly the
+# directive's version when the installed toolchain is older. That is how 1.0.0
+# shipped a go1.25.2 stdlib off a golang:1.25-alpine base. So keep the go.mod
+# directive on a patched release; this tag only needs to be recent enough to
+# avoid a download, and must be bumped before the line goes end-of-life.
 FROM golang:1.26-alpine AS builder
 WORKDIR /app
 
