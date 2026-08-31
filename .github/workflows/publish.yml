@@ -4,11 +4,24 @@ on:
   push:
     tags:
       - "v*.*.*"
+  # Allows rebuilding a release against a fresh builder base (and therefore a
+  # patched stdlib) without inventing a code change.
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
   docker:
     runs-on: ubuntu-latest
     steps:
+      # Required by the scan step below. Note this alone does NOT change what
+      # gets built: docker/build-push-action uses the Git context whenever
+      # `context:` is unset, checkout or no checkout. Both build steps below
+      # set `context: .` explicitly so the scanned tree and the pushed tree
+      # are the same tree.
+      - uses: actions/checkout@v7
+
       - name: Docker meta
         id: meta
         uses: docker/metadata-action@v5
@@ -36,10 +49,40 @@ jobs:
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
+      # Build once for amd64 and hold it locally so it can be scanned before
+      # anything is published. `load: true` cannot be combined with a
+      # multi-platform build; gobinary findings are identical across
+      # architectures, so scanning amd64 is sufficient. The layer cache is
+      # shared with the real build below, so this costs little.
+      - name: Build for scanning
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: local/leader-elector:candidate
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Scan candidate image
+        uses: aquasecurity/trivy-action@0.36.0
+        with:
+          scan-type: image
+          image-ref: local/leader-elector:candidate
+          scanners: vuln
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
+
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
+          context: .
           platforms: linux/amd64,linux/arm64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          provenance: mode=max
+          sbom: true
