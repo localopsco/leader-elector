@@ -1,0 +1,156 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  # The binary can become vulnerable with no code change at all: a new stdlib
+  # CVE lands and the last-built image is retroactively affected. The weekly run
+  # is what surfaces that.
+  schedule:
+    - cron: "17 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - run: go build ./...
+      - run: go vet ./...
+      - name: go.mod is tidy
+        run: go mod tidy -diff
+
+  # Reachability analysis: does a vulnerable *symbol* actually get called from
+  # this binary? Far more precise than the module-level inventory below, so this
+  # one blocks.
+  govulncheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - run: go install golang.org/x/vuln/cmd/govulncheck@latest
+      - run: govulncheck ./...
+
+  # Source-tree dependency scan. Note this reports the whole module graph (so it
+  # over-reports relative to what is actually linked) and does not report stdlib
+  # at all — the image scan below is what catches stdlib.
+  scan-source:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v7
+
+      # Blocking gate: only fixable HIGH/CRITICAL. Failing on findings that have
+      # no upstream fix would just train everyone to ignore a permanently red check.
+      - name: Trivy (blocking, fixable HIGH/CRITICAL)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: fs
+          scanners: vuln
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
+
+      # Non-blocking inventory: everything, including unfixed and MEDIUM/LOW,
+      # recorded in GitHub code scanning so nothing is silently dropped.
+      - name: Trivy (full inventory, SARIF)
+        if: always()
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: fs
+          scanners: vuln
+          format: sarif
+          output: trivy-fs.sarif
+          exit-code: "0"
+      - name: Upload SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: trivy-fs.sarif
+          category: trivy-fs
+
+  # publish.yml only runs on tags, so without this the image is never scanned
+  # until after it ships. Single-arch because `load: true` cannot be combined
+  # with multi-platform; gobinary findings are identical across architectures.
+  scan-image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v3
+      - name: Build image (load locally, do not push)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          push: false
+          tags: local/leader-elector:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Trivy image scan (catches stdlib)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: image
+          image-ref: local/leader-elector:ci
+          scanners: vuln
+          severity: CRITICAL,HIGH
+          ignore-unfixed: true
+          exit-code: "1"
+
+  # A scheduled failure has no PR to show up on, so surface it as a single
+  # deduplicated tracking issue. Deliberately does not publish anything: a
+  # leader elector's failure mode is split-brain, so a cron job should not ship
+  # new bytes to `latest` unattended.
+  report:
+    needs: [build, govulncheck, scan-source, scan-image]
+    if: failure() && github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - name: Open or update tracking issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          title="Weekly vulnerability scan failing"
+
+          # gh issue create fails outright on a label the repo does not have,
+          # so make sure it exists first. --force makes this idempotent.
+          gh label create security --repo "$REPO" --color d93f0b \
+            --description "Vulnerability scan findings" --force
+
+          body=$(cat <<EOF
+          The weekly scheduled scan failed. Run: $RUN_URL
+
+          This usually means a new CVE landed in the Go stdlib or in a
+          dependency since the last release. Check the failing job, then decide
+          whether it warrants cutting a patch tag.
+
+          Note that the Go stdlib version is chosen by the \`go\` directive in
+          go.mod, not by the builder image tag — bumping the directive to the
+          current patch release is usually the fix.
+          EOF
+          )
+
+          existing=$(gh issue list --repo "$REPO" --state open --label security \
+            --search "$title in:title" --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --repo "$REPO" --body "$body"
+          else
+            gh issue create --repo "$REPO" --title "$title" --label security --body "$body"
+          fi
