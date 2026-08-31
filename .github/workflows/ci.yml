@@ -54,7 +54,7 @@ jobs:
       # Blocking gate: only fixable HIGH/CRITICAL. Failing on findings that have
       # no upstream fix would just train everyone to ignore a permanently red check.
       - name: Trivy (blocking, fixable HIGH/CRITICAL)
-        uses: aquasecurity/trivy-action@0.36.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: fs
           scanners: vuln
@@ -66,7 +66,7 @@ jobs:
       # recorded in GitHub code scanning so nothing is silently dropped.
       - name: Trivy (full inventory, SARIF)
         if: always()
-        uses: aquasecurity/trivy-action@0.36.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: fs
           scanners: vuln
@@ -99,7 +99,7 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
       - name: Trivy image scan (catches stdlib)
-        uses: aquasecurity/trivy-action@0.36.0
+        uses: aquasecurity/trivy-action@v0.36.0
         with:
           scan-type: image
           image-ref: local/leader-elector:ci
@@ -126,14 +126,29 @@ jobs:
           REPO: ${{ github.repository }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
+          set -euo pipefail
           title="Weekly vulnerability scan failing"
+
+          # gh issue create fails outright on a label the repo does not have,
+          # so make sure it exists first. --force makes this idempotent.
+          gh label create security --repo "$REPO" --color d93f0b \
+            --description "Vulnerability scan findings" --force
+
+          body=$(cat <<EOF
+          The weekly scheduled scan failed. Run: $RUN_URL
+
+          This usually means a new CVE landed in the Go stdlib or in a
+          dependency since the last release. Check the failing job, then decide
+          whether it warrants cutting a patch tag.
+
+          Note that the Go stdlib version is chosen by the \`go\` directive in
+          go.mod, not by the builder image tag — bumping the directive to the
+          current patch release is usually the fix.
+          EOF
+          )
+
           existing=$(gh issue list --repo "$REPO" --state open --label security \
             --search "$title in:title" --json number --jq '.[0].number // empty')
-          body="The weekly scheduled scan failed. Run: $RUN_URL
-
-          This usually means a new CVE landed in the Go stdlib or in a dependency
-          since the last release. Check the failing job, then decide whether it
-          warrants cutting a patch tag."
           if [ -n "$existing" ]; then
             gh issue comment "$existing" --repo "$REPO" --body "$body"
           else
