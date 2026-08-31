@@ -1,0 +1,28 @@
+version: 2
+updates:
+  # Go modules. The k8s.io/* and sigs.k8s.io/* modules are released in lockstep
+  # and must be bumped together, otherwise each individual PR fails minimum
+  # version selection on its own.
+  - package-ecosystem: gomod
+    directory: "/"
+    schedule:
+      interval: weekly
+    groups:
+      kubernetes:
+        patterns:
+          - "k8s.io/*"
+          - "sigs.k8s.io/*"
+      golang-x:
+        patterns:
+          - "golang.org/x/*"
+
+  # Keeps the golang builder tag and the pinned distroless digest current.
+  - package-ecosystem: docker
+    directory: "/"
+    schedule:
+      interval: weekly
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule:
+      interval: weekly
