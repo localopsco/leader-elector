@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Tech Stack
 
-- Go 1.25 (see `go.mod`)
+- Go 1.26 (`go.mod` pins 1.26.7; the Dockerfile build stage uses `golang:1.26-alpine`)
 - `k8s.io/client-go` (`leaderelection`, `resourcelock.LeaseLock`) for the election itself — always uses `rest.InClusterConfig()`, so it only runs inside a cluster
 - `github.com/alexflint/go-arg` for CLI flag / env var parsing
 - `k8s.io/klog/v2` for logging
