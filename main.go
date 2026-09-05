@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -22,7 +23,8 @@ var (
 		LeaseDuration time.Duration `arg:"--lease-duration,env:ELECTION_LEASE_DURATION" default:"15s" help:"Duration that non-leader candidates will wait after observing a leadership renewal until attempting to acquire leadership of a led but unrenewed leader slot"`
 		Port          string        `arg:"env:ELECTION_PORT" default:"4040" help:"Port on which to query the leader"`
 	}
-	leader Leader
+	leader   Leader
+	leaderMu sync.RWMutex
 )
 
 // Leader contains the name of the current leader of this election
@@ -31,12 +33,17 @@ type Leader struct {
 }
 
 func leaderHandler(res http.ResponseWriter, req *http.Request) {
-	data, err := json.Marshal(leader)
+	leaderMu.RLock()
+	currentLeader := leader
+	leaderMu.RUnlock()
+
+	data, err := json.Marshal(currentLeader)
 	if err != nil {
 		klog.Errorf("Error while marshaling leader response: %s", err.Error())
 		res.WriteHeader(http.StatusInternalServerError)
 		return
 	}
+	res.Header().Set("Content-Type", "application/json")
 	res.Write(data)
 }
 
@@ -63,7 +70,7 @@ func main() {
 	http.HandleFunc("/", leaderHandler)
 	server := &http.Server{Addr: ":" + args.Port, Handler: nil}
 	go func() {
-		if err := server.ListenAndServe(); err != nil {
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			klog.Fatal(err)
 		}
 	}()
@@ -71,7 +78,9 @@ func main() {
 	// configuring Leader Election loop
 	callback := func(name string) {
 		klog.Infof("Currently leading: %s", name)
+		leaderMu.Lock()
 		leader = Leader{name}
+		leaderMu.Unlock()
 	}
 
 	electionConfig := Config{
