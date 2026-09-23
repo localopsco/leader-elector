@@ -14,12 +14,14 @@ import (
 )
 
 type Config struct {
-	LockName      string
-	LockNamespace string
-	RetryPeriod   time.Duration
-	LeaseDuration time.Duration
-	RenewDeadline time.Duration
-	Callback      func(leader string)
+	LockName        string
+	LockNamespace   string
+	RetryPeriod     time.Duration
+	LeaseDuration   time.Duration
+	RenewDeadline   time.Duration
+	Callback        func(leader string)
+	RunningLockName string
+	Done            <-chan struct{}
 }
 
 // Run creates and runs a new leader election
@@ -34,11 +36,68 @@ func Run(ctx context.Context, cfg Config) {
 
 	client := clientset.NewForConfigOrDie(config)
 
+	callbacks := leaderelection.LeaderCallbacks{
+		OnStartedLeading: func(ctx context.Context) {
+			runExclusive(ctx, client, id, cfg)
+		},
+		OnStoppedLeading: func() {
+			klog.Infof("Leader lost: %s", id)
+		},
+		OnNewLeader: func(identity string) {
+			if identity == id {
+				return
+			}
+			cfg.Callback(identity)
+		},
+	}
+
+	leaderelection.RunOrDie(ctx, electionConfig(client, id, cfg.LockName, cfg, callbacks))
+	klog.Info("Exiting election loop.")
+}
+
+func runExclusive(ctx context.Context, client *clientset.Clientset, id string, cfg Config) {
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	select {
+	case <-cfg.Done:
+		cfg.Callback(id)
+		return
+	default:
+	}
+
+	go func() {
+		select {
+		case <-cfg.Done:
+			klog.Infof("Task done, releasing %s", cfg.RunningLockName)
+			cancel()
+		case <-ctx.Done():
+		}
+	}()
+
+	callbacks := leaderelection.LeaderCallbacks{
+		OnStartedLeading: func(ctx context.Context) {
+			cfg.Callback(id)
+		},
+		OnStoppedLeading: func() {
+			klog.Infof("Released %s", cfg.RunningLockName)
+		},
+		OnNewLeader: func(identity string) {
+			if identity != id {
+				klog.Infof("Waiting for %s to finish the task", identity)
+			}
+		},
+	}
+
+	leaderelection.RunOrDie(ctx, electionConfig(client, id, cfg.RunningLockName, cfg, callbacks))
+}
+
+func electionConfig(client *clientset.Clientset, id, lockName string, cfg Config, callbacks leaderelection.LeaderCallbacks) leaderelection.LeaderElectionConfig {
 	// we use the Lease lock type since edits to Leases are less common
 	// and fewer objects in the cluster watch "all Leases".
 	lock := &resourcelock.LeaseLock{
 		LeaseMeta: metav1.ObjectMeta{
-			Name:      cfg.LockName,
+			Name:      lockName,
 			Namespace: cfg.LockNamespace,
 		},
 		Client: client.CoordinationV1(),
@@ -47,19 +106,7 @@ func Run(ctx context.Context, cfg Config) {
 		},
 	}
 
-	callbacks := leaderelection.LeaderCallbacks{
-		OnStartedLeading: func(ctx context.Context) {
-			cfg.Callback(id)
-		},
-		OnStoppedLeading: func() {
-			klog.Infof("Leader lost: %s", id)
-		},
-		OnNewLeader: func(identity string) {
-			cfg.Callback(identity)
-		},
-	}
-
-	leaderElectionConf := leaderelection.LeaderElectionConfig{
+	return leaderelection.LeaderElectionConfig{
 		Lock: lock,
 		// IMPORTANT: you MUST ensure that any code you have that
 		// is protected by the lease must terminate **before**
@@ -73,7 +120,4 @@ func Run(ctx context.Context, cfg Config) {
 		RetryPeriod:     cfg.RetryPeriod,
 		Callbacks:       callbacks,
 	}
-
-	leaderelection.RunOrDie(ctx, leaderElectionConf)
-	klog.Info("Exiting election loop.")
 }

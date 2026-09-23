@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -21,8 +22,12 @@ var (
 		RetryPeriod   time.Duration `arg:"--retry-period,env:ELECTION_RETRY_PERIOD" default:"2s" help:"Duration between each action retry"`
 		LeaseDuration time.Duration `arg:"--lease-duration,env:ELECTION_LEASE_DURATION" default:"15s" help:"Duration that non-leader candidates will wait after observing a leadership renewal until attempting to acquire leadership of a led but unrenewed leader slot"`
 		Port          string        `arg:"env:ELECTION_PORT" default:"4040" help:"Port on which to query the leader"`
+		Revision      string        `arg:"--revision,env:ELECTION_REVISION" help:"Revision to scope this election to, typically the pod-template-hash label, so each rollout elects its own leader"`
 	}
 	leader Leader
+
+	taskDone      = make(chan struct{})
+	closeTaskDone sync.Once
 )
 
 // Leader contains the name of the current leader of this election
@@ -40,8 +45,19 @@ func leaderHandler(res http.ResponseWriter, req *http.Request) {
 	res.Write(data)
 }
 
+func doneHandler(res http.ResponseWriter, req *http.Request) {
+	if req.Method != http.MethodPost {
+		res.WriteHeader(http.StatusMethodNotAllowed)
+		return
+	}
+	closeTaskDone.Do(func() { close(taskDone) })
+}
+
 func main() {
-	arg.MustParse(&args)
+	parser := arg.MustParse(&args)
+	if args.Revision == "running" {
+		parser.Fail(`--revision cannot be "running", it would collide with the <election>-running lease`)
+	}
 
 	// use a Go context so we can tell the leaderelection code when we
 	// want to step down
@@ -61,6 +77,7 @@ func main() {
 
 	// configuring HTTP server
 	http.HandleFunc("/", leaderHandler)
+	http.HandleFunc("/done", doneHandler)
 	server := &http.Server{Addr: ":" + args.Port, Handler: nil}
 	go func() {
 		if err := server.ListenAndServe(); err != nil {
@@ -74,13 +91,21 @@ func main() {
 		leader = Leader{name}
 	}
 
+	lockName := args.LockName
+	if args.Revision != "" {
+		lockName += "-" + args.Revision
+	}
+
 	electionConfig := Config{
-		LockName:      args.LockName,
+		LockName:      lockName,
 		LockNamespace: args.Namespace,
 		RenewDeadline: args.RenewDeadline,
 		RetryPeriod:   args.RetryPeriod,
 		LeaseDuration: args.LeaseDuration,
 		Callback:      callback,
+
+		RunningLockName: args.LockName + "-running",
+		Done:            taskDone,
 	}
 
 	Run(ctx, electionConfig)
