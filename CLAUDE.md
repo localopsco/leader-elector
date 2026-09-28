@@ -12,7 +12,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `k8s.io/client-go` (`leaderelection`, `resourcelock.LeaseLock`) for the election itself — always uses `rest.InClusterConfig()`, so it only runs inside a cluster
 - `github.com/alexflint/go-arg` for CLI flag / env var parsing
 - `k8s.io/klog/v2` for logging
-- No test files, no Makefile, no linter config, no CI test job — the only CI workflow builds and publishes the Docker image
+- No test files, no Makefile, no linter config — the only CI workflow builds and publishes the Docker image
 
 ## Architecture
 
@@ -52,4 +52,9 @@ go mod tidy
 docker build -t leader-elector .
 ```
 
-There are no test files, linter configuration, or Makefile in this repo. The only GitHub Actions workflow (`.github/workflows/publish.yml`) builds and pushes a multi-arch (`linux/amd64,linux/arm64`) Docker image to Docker Hub (`localopsroot/leader-elector`) when a `v*.*.*` tag is pushed — it does not run tests.
+There are no test files, linter configuration, or Makefile in this repo. The only GitHub Actions workflow (`.github/workflows/publish.yml`) builds a multi-arch (`linux/amd64,linux/arm64`) Docker image on every PR, and pushes it:
+
+- on a push to `main`: to a private ECR repo in `us-east-1` as `sha-<commit>`, for testing unreleased versions
+- on a `v*.*.*` tag pointing at a commit on `prod`: to Docker Hub (`localopsroot/leader-elector`) as `1.2.3`, `1.2` and `1`. A tag on a commit that isn't on `prod` fails CI and publishes nothing.
+
+To release, merge `main` into `prod` via PR, then tag the prod commit (`git switch prod && git pull && git tag vX.Y.Z && git push origin vX.Y.Z`).
