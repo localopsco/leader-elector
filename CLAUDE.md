@@ -12,7 +12,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - `k8s.io/client-go` (`leaderelection`, `resourcelock.LeaseLock`) for the election itself — always uses `rest.InClusterConfig()`, so it only runs inside a cluster
 - `github.com/alexflint/go-arg` for CLI flag / env var parsing
 - `k8s.io/klog/v2` for logging
-- No test files, no Makefile, no linter config, no CI test job — the only CI workflow builds and publishes the Docker image
+- No test files, no Makefile, no linter config — the only CI workflow builds and publishes the Docker image
 
 ## Architecture
 
@@ -52,4 +52,10 @@ go mod tidy
 docker build -t leader-elector .
 ```
 
-There are no test files, linter configuration, or Makefile in this repo. The only GitHub Actions workflow (`.github/workflows/publish.yml`) builds and pushes a multi-arch (`linux/amd64,linux/arm64`) Docker image to Docker Hub (`localopsroot/leader-elector`) when a `v*.*.*` tag is pushed — it does not run tests.
+There are no test files, linter configuration, or Makefile in this repo. Three GitHub Actions workflows build a multi-arch (`linux/amd64,linux/arm64`) Docker image:
+
+- `build-leader-elector.yml`: on every PR, build only
+- `push-leader-elector-ecr.yml`: on a push to `main`, push to our public ECR (`public.ecr.aws/...`) tagged with the short commit SHA, for testing unreleased versions. Uses the `main` GitHub environment (`AWS_ROLE_ARN`, `AWS_REGION`, `ECR_REPOSITORY`).
+- `release-leader-elector.yml`: on a `v*.*.*` tag pointing at a commit on `prod`, push to Docker Hub (`localopsroot/leader-elector`) as `1.2.3` (the `v` is stripped) and `latest`. Uses the `prod` GitHub environment (`DOCKERHUB_USERNAME`, `DOCKERHUB_TOKEN`). A tag on a commit that isn't on `prod` fails and publishes nothing.
+
+To release, merge `main` into `prod` via PR, then tag the prod commit (`git switch prod && git pull && git tag vX.Y.Z && git push origin vX.Y.Z`). Docker Hub already has `1.1.0` without a matching git tag, so the next release must be `v1.1.1` or later.

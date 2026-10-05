@@ -1,0 +1,55 @@
+name: release leader-elector to Docker Hub
+# Pushing a version tag (e.g. v1.2.3) on a prod commit publishes
+# localopsroot/leader-elector:1.2.3 and :latest to Docker Hub.
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+concurrency:
+  group: release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  build-push:
+    runs-on: blacksmith-4vcpu-ubuntu-2204
+    permissions:
+      contents: read
+    environment:
+      name: prod
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # full history, so the next step can see prod
+
+      # A tag isn't tied to a branch, so check that only code merged into prod is published.
+      - name: check tag is on prod
+        run: |
+          if ! git merge-base --is-ancestor HEAD origin/prod; then
+            echo "::error::$GITHUB_REF_NAME is not on prod. Merge into prod, then tag the prod commit."
+            exit 1
+          fi
+
+      - name: generate version
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> $GITHUB_ENV
+
+      - name: login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ vars.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: set up docker builder
+        uses: useblacksmith/setup-docker-builder@v2
+        with:
+          cache-key: leader-elector/release
+
+      - name: build and push leader-elector image
+        uses: useblacksmith/build-push-action@v2
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            localopsroot/leader-elector:${{ env.VERSION }}
+            localopsroot/leader-elector:latest
