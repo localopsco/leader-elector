@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Tech Stack
 
-- Go 1.25 (see `go.mod`)
+- Go 1.26 (`go.mod` requires 1.26.7; the Dockerfile builds on `golang:1.26-alpine`)
 - `k8s.io/client-go` (`leaderelection`, `resourcelock.LeaseLock`) for the election itself — always uses `rest.InClusterConfig()`, so it only runs inside a cluster
 - `github.com/alexflint/go-arg` for CLI flag / env var parsing
 - `k8s.io/klog/v2` for logging
@@ -19,14 +19,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 The whole program is two files:
 
 - `main.go` — parses CLI args/env vars into a package-level `args` struct, starts a minimal HTTP server (`net/http`, no framework) that serves the current leader as JSON (`{"name": "..."}`) on `/`, wires up an `os.Interrupt`/`SIGTERM` handler that cancels a `context.Context` to trigger graceful leader step-down, then calls `Run` (blocking) and shuts the HTTP server down afterward.
-- `election.go` — `Run(ctx, cfg Config)` builds an in-cluster Kubernetes client, constructs a `resourcelock.LeaseLock` scoped to `cfg.LockName`/`cfg.LockNamespace` with `Identity` set to `$HOSTNAME` (the Pod name), and calls `leaderelection.RunOrDie` with that lock. `cfg.Callback` (set to a closure in `main.go` that updates the package-level `leader` var) fires on `OnStartedLeading` and `OnNewLeader`, so the HTTP handler always reflects the most recently observed leader, not just "am I the leader."
+- `election.go` — `Run(ctx, cfg Config)` builds an in-cluster Kubernetes client, constructs a `resourcelock.LeaseLock` scoped to `cfg.LockName`/`cfg.LockNamespace` with `Identity` set to `$HOSTNAME` (the Pod name), and calls `leaderelection.RunOrDie` with that lock and `ReleaseOnCancel: true`, so SIGTERM releases the lease immediately instead of making other replicas wait out the lease duration. `cfg.Callback` (set to a closure in `main.go` that updates the package-level `leader` var) fires on `OnStartedLeading` and `OnNewLeader`, so the HTTP handler always reflects the most recently observed leader, not just "am I the leader."
 
 Configuration is entirely via CLI flags or environment variables (`go-arg` struct tags in `main.go`):
 
 | Flag | Env var | Default | Purpose |
 |---|---|---|---|
 | `--election` | `ELECTION_NAME` | `default` | Name of the Lease object |
-| (positional `Namespace`) | `ELECTION_NAMESPACE` | `default` | Namespace of the Lease |
+| `--namespace` | `ELECTION_NAMESPACE` | `default` | Namespace of the Lease |
 | `--renew-deadline` | `ELECTION_RENEW_DEADLINE` | `10s` | How long the leader retries renewing before giving up |
 | `--retry-period` | `ELECTION_RETRY_PERIOD` | `2s` | Delay between election retries |
 | `--lease-duration` | `ELECTION_LEASE_DURATION` | `15s` | How long non-leaders wait before attempting to acquire an unrenewed lease |
