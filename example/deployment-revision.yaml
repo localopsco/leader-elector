@@ -36,7 +36,7 @@ spec:
               memory: "64Mi"
               cpu: "100m"
         - name: migrate
-          image: alpine/curl:v1.0.3
+          image: alpine/curl:8.21.0
           command:
             - "/bin/sh"
             - "-c"
