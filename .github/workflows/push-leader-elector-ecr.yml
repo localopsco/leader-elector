@@ -1,10 +1,12 @@
 name: push leader-elector to ECR
 # Every push to main: build the image and push it to our public ECR, tagged
 # with the short commit SHA, to test before releasing to Docker Hub.
+# Can also be run manually from the Actions tab ("Run workflow"), on main only.
 on:
   push:
     branches:
       - main
+  workflow_dispatch:
 
 concurrency:
   group: push-ecr-${{ github.ref_name }}
@@ -12,6 +14,7 @@ concurrency:
 
 jobs:
   build-push:
+    if: github.ref == 'refs/heads/main'
     runs-on: blacksmith-4vcpu-ubuntu-2204
     permissions:
       id-token: write
