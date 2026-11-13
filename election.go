@@ -56,6 +56,11 @@ func Run(ctx context.Context, cfg Config) {
 }
 
 func runExclusive(ctx context.Context, client *clientset.Clientset, id string, cfg Config) {
+	if cfg.RunningLockName == "" {
+		cfg.Callback(id)
+		return
+	}
+
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 

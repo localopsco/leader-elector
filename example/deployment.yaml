@@ -17,6 +17,8 @@ spec:
         - name: elector-sidecar
           image: localops/leader-elector:0.3.0
           imagePullPolicy: Always
+          # native sidecar: keeps running alongside the containers below
+          restartPolicy: Always
           ports:
             - containerPort: 4040
           args:

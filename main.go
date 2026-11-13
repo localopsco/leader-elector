@@ -91,9 +91,12 @@ func main() {
 		leader = Leader{name}
 	}
 
-	lockName := args.LockName
+	// without a revision there is a single election, so there is nothing
+	// to serialize across rollouts and the running lease is skipped
+	lockName, runningLockName := args.LockName, ""
 	if args.Revision != "" {
 		lockName += "-" + args.Revision
+		runningLockName = args.LockName + "-running"
 	}
 
 	electionConfig := Config{
@@ -104,7 +107,7 @@ func main() {
 		LeaseDuration: args.LeaseDuration,
 		Callback:      callback,
 
-		RunningLockName: args.LockName + "-running",
+		RunningLockName: runningLockName,
 		Done:            taskDone,
 	}
 
