@@ -18,21 +18,24 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 The whole program is two files:
 
-- `main.go` — parses CLI args/env vars into a package-level `args` struct, starts a minimal HTTP server (`net/http`, no framework) that serves the current leader as JSON (`{"name": "..."}`) on `/`, wires up an `os.Interrupt`/`SIGTERM` handler that cancels a `context.Context` to trigger graceful leader step-down, then calls `Run` (blocking) and shuts the HTTP server down afterward.
-- `election.go` — `Run(ctx, cfg Config)` builds an in-cluster Kubernetes client, constructs a `resourcelock.LeaseLock` scoped to `cfg.LockName`/`cfg.LockNamespace` with `Identity` set to `$HOSTNAME` (the Pod name), and calls `leaderelection.RunOrDie` with that lock. `cfg.Callback` (set to a closure in `main.go` that updates the package-level `leader` var) fires on `OnStartedLeading` and `OnNewLeader`, so the HTTP handler always reflects the most recently observed leader, not just "am I the leader."
+- `main.go` — parses CLI args/env vars into a package-level `args` struct, starts a minimal HTTP server (`net/http`, no framework) that serves the current leader as JSON (`{"name": "..."}`) on `/` and accepts `POST /done` (closes the `taskDone` channel once, via `sync.Once`), builds the lease names from `--election`/`--revision`, wires up an `os.Interrupt`/`SIGTERM` handler that cancels a `context.Context` to trigger graceful leader step-down, then calls `Run` (blocking) and shuts the HTTP server down afterward.
+- `election.go` — `Run(ctx, cfg Config)` builds an in-cluster Kubernetes client, constructs a `resourcelock.LeaseLock` scoped to `cfg.LockName`/`cfg.LockNamespace` with `Identity` set to `$HOSTNAME` (the Pod name), and calls `leaderelection.RunOrDie` with that lock. `cfg.Callback` (set to a closure in `main.go` that updates the package-level `leader` var) fires on `OnNewLeader` for other pods, so the HTTP handler reflects the most recently observed leader. For its own identity, `OnStartedLeading` calls `runExclusive`:
+  - **Simple mode** (`cfg.RunningLockName == ""`, no `--revision`): reports itself as leader immediately.
+  - **Revision mode** (`--revision` set, lock is `<election>-<revision>`): runs a nested `RunOrDie` on the shared `<election>-running` lease and only reports itself once it holds it, which serializes leaders across rollouts. `cfg.Done` (from `POST /done`) cancels the nested election, releasing the lease via `ReleaseOnCancel`; if `/done` already fired, it skips the running lease. Until it holds the lease, the leader's own `/` returns `""`, so callers must poll.
 
 Configuration is entirely via CLI flags or environment variables (`go-arg` struct tags in `main.go`):
 
 | Flag | Env var | Default | Purpose |
 |---|---|---|---|
 | `--election` | `ELECTION_NAME` | `default` | Name of the Lease object |
-| (positional `Namespace`) | `ELECTION_NAMESPACE` | `default` | Namespace of the Lease |
+| `--namespace` | `ELECTION_NAMESPACE` | `default` | Namespace of the Lease(s) |
+| `--revision` | `ELECTION_REVISION` | (unset) | Enables revision mode; typically the `pod-template-hash` label. `running` is rejected |
 | `--renew-deadline` | `ELECTION_RENEW_DEADLINE` | `10s` | How long the leader retries renewing before giving up |
 | `--retry-period` | `ELECTION_RETRY_PERIOD` | `2s` | Delay between election retries |
 | `--lease-duration` | `ELECTION_LEASE_DURATION` | `15s` | How long non-leaders wait before attempting to acquire an unrenewed lease |
 | `--port` | `ELECTION_PORT` | `4040` | Port for the leader-query HTTP endpoint |
 
-The `example/` directory shows the intended deployment pattern: `leader-elector` runs as an `initContainer` sidecar in a Deployment, and a `ServiceAccount`/`Role`/`RoleBinding` (`example/rbac.yaml`) grant it `get`/`create`/`update` on `leases.coordination.k8s.io` in its namespace. Other containers in the same Pod query `http://localhost:<port>` to learn who currently holds leadership.
+The `example/` directory shows the intended deployment pattern: `leader-elector` runs as a native sidecar (`initContainer` with `restartPolicy: Always`) in a Deployment — `deployment.yaml` for simple mode, `deployment-revision.yaml` for revision mode with a poll-then-`POST /done` task container — and a `ServiceAccount`/`Role`/`RoleBinding` (`example/rbac.yaml`) grant it `get`/`create`/`update` on `leases.coordination.k8s.io` in its namespace. Other containers in the same Pod query `http://localhost:<port>` to learn who currently holds leadership.
 
 ## Common Commands
 

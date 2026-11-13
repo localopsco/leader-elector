@@ -1,0 +1,68 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: leader-election-revision
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: leader-election-revision
+  template:
+    metadata:
+      labels:
+        app: leader-election-revision
+    spec:
+      serviceAccountName: leader-election
+      initContainers:
+        - name: elector-sidecar
+          image: localopsroot/leader-elector:1.2.0
+          # native sidecar: keeps running alongside the containers below
+          restartPolicy: Always
+          ports:
+            - containerPort: 4040
+          args:
+            - "--election=migrations"
+            - "--namespace=default"
+            - "--port=4040"
+          env:
+            # each rollout elects its own leader, and leaders of
+            # different rollouts run the task one at a time
+            - name: ELECTION_REVISION
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.labels['pod-template-hash']
+          resources:
+            limits:
+              memory: "64Mi"
+              cpu: "100m"
+        - name: migrate
+          image: alpine/curl:8.21.0
+          command:
+            - "/bin/sh"
+            - "-c"
+            - |
+              set -e
+              apk add --no-cache jq
+
+              # the leader reports "" until the previous rollout's
+              # leader has finished, so poll instead of checking once
+              until NAME=$(curl -sf http://localhost:4040 | jq -r '.name') && [ -n "$NAME" ]; do
+                sleep 1
+              done
+
+              if [ "$NAME" = "$POD_NAME" ]; then
+                echo "I am the leader, running migrations"
+                # run your migrations here
+              fi
+
+              # always signal done, on every pod, and only on success
+              curl -sf -X POST http://localhost:4040/done
+          env:
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+      containers:
+        - name: app
+          image: alpine:3.20
+          command: ["/bin/sh", "-c", "sleep infinity"]
