@@ -1,0 +1,50 @@
+name: push leader-elector to ECR
+# Every push to main: build the image and push it to our public ECR, tagged
+# with the short commit SHA, to test before releasing to Docker Hub.
+on:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: push-ecr-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  build-push:
+    runs-on: blacksmith-4vcpu-ubuntu-2204
+    permissions:
+      id-token: write
+      contents: read
+    environment:
+      name: main
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: configure aws credentials via oidc
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: login to ECR
+        id: login-ecr
+        uses: aws-actions/amazon-ecr-login@v2
+        with:
+          registry-type: public
+
+      - name: generate short SHA
+        run: echo "SHORT_SHA=${GITHUB_SHA::7}" >> $GITHUB_ENV
+
+      - name: set up docker builder
+        uses: useblacksmith/setup-docker-builder@v2
+        with:
+          cache-key: leader-elector/ecr
+
+      - name: build and push leader-elector image
+        uses: useblacksmith/build-push-action@v2
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.login-ecr.outputs.registry }}/${{ vars.ECR_REPOSITORY }}:${{ env.SHORT_SHA }}
