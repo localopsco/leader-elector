@@ -24,7 +24,8 @@ var (
 		Port          string        `arg:"env:ELECTION_PORT" default:"4040" help:"Port on which to query the leader"`
 		Revision      string        `arg:"--revision,env:ELECTION_REVISION" help:"Revision to scope this election to, typically the pod-template-hash label, so each rollout elects its own leader"`
 	}
-	leader Leader
+	leader   Leader
+	leaderMu sync.RWMutex
 
 	taskDone      = make(chan struct{})
 	closeTaskDone sync.Once
@@ -36,12 +37,17 @@ type Leader struct {
 }
 
 func leaderHandler(res http.ResponseWriter, req *http.Request) {
-	data, err := json.Marshal(leader)
+	leaderMu.RLock()
+	currentLeader := leader
+	leaderMu.RUnlock()
+
+	data, err := json.Marshal(currentLeader)
 	if err != nil {
 		klog.Errorf("Error while marshaling leader response: %s", err.Error())
 		res.WriteHeader(http.StatusInternalServerError)
 		return
 	}
+	res.Header().Set("Content-Type", "application/json")
 	res.Write(data)
 }
 
@@ -80,7 +86,7 @@ func main() {
 	http.HandleFunc("/done", doneHandler)
 	server := &http.Server{Addr: ":" + args.Port, Handler: nil}
 	go func() {
-		if err := server.ListenAndServe(); err != nil {
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			klog.Fatal(err)
 		}
 	}()
@@ -88,7 +94,9 @@ func main() {
 	// configuring Leader Election loop
 	callback := func(name string) {
 		klog.Infof("Currently leading: %s", name)
+		leaderMu.Lock()
 		leader = Leader{name}
+		leaderMu.Unlock()
 	}
 
 	// without a revision there is a single election, so there is nothing
